@@ -1,0 +1,198 @@
+version: 1
+repo: crossmint-in-a-box
+last_updated: 2025-08-18
+
+requirements:
+  env:
+    - key: NEXT_PUBLIC_CROSSMINT_CLIENT_API_KEY
+      required: true
+      description: Crossmint client API key for the embedded SDK (frontend)
+    - key: CROSSMINT_SERVER_API_KEY
+      required: true
+      description: Crossmint server API key (backend API routes)
+    - key: NEXT_PUBLIC_DEFAULT_CHAIN
+      required: true
+      default: base-sepolia
+      description: Default EVM chain identifier used across flows
+    - key: NEXT_PUBLIC_CROSSMINT_ENV
+      required: false
+      default: staging
+      enum: [staging, production]
+      description: Crossmint environment selector
+    - key: NEXT_PUBLIC_CROSSMINT_COLLECTION_ID
+      required: false
+      description: Collection ID for embedded checkout demo (enables PurchaseFlow)
+
+paths:
+  providers_root: app/page.tsx
+  constants: lib/constants.ts
+  utils: lib/utils.ts
+
+style_guidelines:
+  - Add "use client" as the first line of interactive components.
+  - Reuse button styles from lib/constants.ts via buttonStyles.
+  - Include title and aria-label on icon-only buttons.
+  - Prefer env-driven chains; do not expose server API keys in client code.
+  - Prioritize API error fields in this order: message → errors → error.
+
+primitives:
+  providers:
+    path: app/page.tsx
+    component: Providers
+    description: Top-level providers for Wagmi, React Query, and Crossmint SDK.
+
+  components:
+    WalletInfo: { path: app/components/WalletInfo.tsx }
+    OnrampFlow: { path: app/components/OnrampFlow.tsx }
+    PurchaseFlow: { path: app/components/PurchaseFlow.tsx }
+    WorldstoreFlow: { path: app/components/WorldstoreFlow.tsx }
+    SendFlow: { path: app/components/SendFlow.tsx }
+    AgentWallet: { path: app/components/AgentWallet.tsx }
+    ViewTransactions: { path: app/components/ViewTransactions.tsx }
+    CollectionManager: { path: app/components/minting/CollectionManager.tsx }
+    CollectionDetail: { path: app/components/minting/CollectionDetail.tsx }
+
+  apis:
+    nft_collections: { path: app/api/nft-collections/route.ts }
+    agent_transfer: { path: app/api/agent-transfer/route.ts }
+    agent_approval: { path: app/api/agent-approval/route.ts }
+    agent_transaction: { path: app/api/agent-transaction/route.ts }
+    create_agent_wallet: { path: app/api/create-agent-wallet/route.ts }
+    get_transactions: { path: app/api/get-transactions/route.ts }
+
+examples:
+  import_providers:
+    file: app/page.tsx
+    snippet: |
+      function Providers({ children }: { children: React.ReactNode }) {
+        return (
+          <WagmiProvider config={wagmiConfig}>
+            <QueryClientProvider client={queryClient}>
+              <CrossmintProvider apiKey={process.env.NEXT_PUBLIC_CROSSMINT_CLIENT_API_KEY || ''}>
+                <CrossmintAuthProvider loginMethods={["email", "google", "twitter"]}>
+                  <CrossmintWalletProvider createOnLogin={{ chain: DEFAULT_CHAIN as any, signer: { type: DEFAULT_SIGNER_TYPE as any } }}>
+                    {children}
+                  </CrossmintWalletProvider>
+                </CrossmintAuthProvider>
+              </CrossmintProvider>
+            </QueryClientProvider>
+          </WagmiProvider>
+        );
+      }
+
+  embedded_checkout_lineitem:
+    description: How we build the line item for a specific collection/template in embedded checkout.
+    snippet: |
+      <CrossmintEmbeddedCheckout
+        recipient={{ walletAddress: activeWallet }}
+        lineItems={{
+          collectionLocator: `crossmint:${collectionId}:${templateId}`,
+          callData: { quantity: 1 },
+        }}
+        payment={{ fiat: { enabled: true }, crypto: { enabled: true, payer: { address: activeWallet, initialChain: DEFAULT_CHAIN } } }}
+      />
+
+  mint_recipient_formats:
+    description: Valid recipient formats for minting
+    formats:
+      - <chain>:<address>
+      - email:<email_address>:<chain>
+      - userId:<userId>:<chain>
+      - twitter:<twitter_handle>:<chain>
+
+# High-level tasks LLMs can implement by copy/paste or minimal edits
+tasks:
+  - id: add_onramp_button
+    goal: Add an on-ramp flow button under Funding.
+    requires:
+      components: [OnrampFlow]
+    steps:
+      - file: app/page.tsx
+        import: { from: './components', names: [OnrampFlow] }
+      - file: app/page.tsx
+        insert_after: '<h2 className="text-lg font-semibold text-gray-900 mb-4">Funding</h2>'
+        usage: |
+          <OnrampFlow onShowContent={(c) => setActiveContent(c)} isActive={activeFlow === 'onramp'} />
+
+  - id: add_embedded_checkout
+    goal: Enable embedded checkout for NFT purchases.
+    requires:
+      env: [NEXT_PUBLIC_CROSSMINT_COLLECTION_ID]
+      components: [PurchaseFlow]
+    steps:
+      - file: app/page.tsx
+        import: { from: './components', names: [PurchaseFlow] }
+      - file: app/page.tsx
+        insert_after: '<h2 className="text-lg font-semibold text-gray-900 mb-4">Commerce</h2>'
+        usage: |
+          <PurchaseFlow onShowContent={(c) => setActiveContent(c)} isActive={activeFlow === 'purchase'} />
+
+  - id: add_agent_wallets
+    goal: Add agent wallet management (create, delegated signers, view txs).
+    requires:
+      env: [CROSSMINT_SERVER_API_KEY]
+      components: [AgentWallet]
+    steps:
+      - file: app/page.tsx
+        import: { from: './components', names: [AgentWallet] }
+      - file: app/page.tsx
+        insert_after: '<h2 className="text-lg font-semibold text-gray-900 mb-4">Your Wallet</h2>'
+        usage: |
+          <AgentWallet onShowContent={(c) => setActiveContent(c)} isActive={activeFlow === 'agent-wallet'} />
+
+  - id: add_view_transactions
+    goal: Add a transactions viewer with approval support.
+    requires:
+      env: [CROSSMINT_SERVER_API_KEY]
+      components: [ViewTransactions]
+    steps:
+      - file: app/page.tsx
+        import: { from: './components', names: [ViewTransactions] }
+      - file: app/page.tsx
+        insert_after: '<h2 className="text-lg font-semibold text-gray-900 mb-4">Your Wallet</h2>'
+        usage: |
+          <ViewTransactions onShowContent={(c) => setActiveContent(c)} isActive={activeFlow === 'view-transactions'} />
+
+  - id: add_send_usdc
+    goal: Add a USDC send flow (smart wallet + agent route).
+    requires:
+      components: [SendFlow]
+    steps:
+      - file: app/page.tsx
+        import: { from: './components', names: [SendFlow] }
+      - file: app/page.tsx
+        insert_after: '<h2 className="text-lg font-semibold text-gray-900 mb-4">Funding</h2>'
+        usage: |
+          <SendFlow onShowContent={(c) => setActiveContent(c)} isActive={activeFlow === 'send'} />
+
+  - id: add_collection_manager
+    goal: Add the Minting section with the Collection Manager.
+    requires:
+      components: [CollectionManager]
+      env: [CROSSMINT_SERVER_API_KEY, NEXT_PUBLIC_DEFAULT_CHAIN]
+    steps:
+      - file: app/page.tsx
+        import: { from: './components', names: [CollectionManager] }
+      - file: app/page.tsx
+        insert_after: '<h2 className="text-lg font-semibold text-gray-900 mb-4">Minting</h2>'
+        usage: |
+          <CollectionManager onShowContent={(c) => { setActiveContent(c); setActiveFlow('collection-manager'); }} isActive={activeFlow === 'collection-manager'} />
+
+prompts:
+  - trigger: I want onramp on my website
+    suggest_tasks: [add_onramp_button]
+  - trigger: I want embedded checkout
+    suggest_tasks: [add_embedded_checkout]
+  - trigger: I want to create agent wallets and add delegates
+    suggest_tasks: [add_agent_wallets]
+  - trigger: I want to view transactions and approve
+    suggest_tasks: [add_view_transactions]
+  - trigger: I want to send USDC
+    suggest_tasks: [add_send_usdc]
+  - trigger: I want to manage NFT collections
+    suggest_tasks: [add_collection_manager]
+
+notes:
+  - All components assume the Providers wrapper in app/page.tsx.
+  - Server routes require CROSSMINT_SERVER_API_KEY; never expose in client code.
+  - DEFAULT_CHAIN is used across flows; avoid hard-coding chain inputs in UI.
