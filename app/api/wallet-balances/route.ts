@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { DEFAULT_CHAIN } from '@/lib/constants';
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,20 +13,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const clientSecret = process.env.NEXT_PUBLIC_CROSSMINT_CLIENT_API_KEY;
-    if (!clientSecret) {
+    const apiKey = process.env.CROSSMINT_SERVER_API_KEY;
+    if (!apiKey) {
       return NextResponse.json(
-        { error: 'Client secret not configured' },
+        { error: 'CROSSMINT_SERVER_API_KEY is not configured' },
         { status: 500 }
       );
     }
 
     const baseUrl = process.env.NEXT_PUBLIC_CROSSMINT_ENV === 'production' ? 'www' : 'staging';
     const response = await fetch(
-      `https://${baseUrl}.crossmint.com/api/v1-alpha2/wallets/${walletAddress}/balances?tokens=usdc`,
+      `https://${baseUrl}.crossmint.com/api/2025-06-09/wallets/${walletAddress}/balances?tokens=usdc&chains=${DEFAULT_CHAIN}`,
       {
         headers: {
-          'X-CLIENT-SECRET': clientSecret,
+          'X-API-KEY': apiKey,
           'Content-Type': 'application/json',
         },
       }
@@ -34,7 +35,7 @@ export async function GET(request: NextRequest) {
     if (!response.ok) {
       const errorText = await response.text();
       return NextResponse.json(
-        { error: `Failed to fetch balances: ${response.statusText}` },
+        { error: `Failed to fetch balances: ${response.statusText}`, detail: errorText },
         { status: response.status }
       );
     }
@@ -48,4 +49,4 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-} 
+}

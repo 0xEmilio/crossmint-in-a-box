@@ -13,17 +13,20 @@ export const buttonStyles = {
 };
 
 export const cardStyles = {
-  base: '!border !rounded-lg !p-6',
-  error: '!bg-red-50 !border !border-red-200 !rounded-md !p-4',
-  success: '!bg-green-50 !border !border-green-200 !rounded-md !p-4',
-  info: '!bg-green-50 !border !border-green-200 !rounded-md !p-4',
-  warning: '!bg-yellow-50 !border !border-yellow-200 !rounded-md !p-3',
+  base: '!border !border-gray-200 dark:!border-gray-800 dark:!text-gray-100 !rounded-lg !p-6',
+  error: '!bg-red-50 dark:!bg-red-500/10 !border !border-red-200 dark:!border-red-500/30 !rounded-md !p-4',
+  success: '!bg-green-50 dark:!bg-green-500/10 !border !border-green-200 dark:!border-green-500/30 !rounded-md !p-4',
+  info: '!bg-green-50 dark:!bg-green-500/10 !border !border-green-200 dark:!border-green-500/30 !rounded-md !p-4',
+  warning: '!bg-yellow-50 dark:!bg-yellow-500/10 !border !border-yellow-200 dark:!border-yellow-500/30 !rounded-md !p-3',
 };
 
 export const inputStyles = {
-  base: '!w-full !px-3 !py-2 !border !border-gray-300 !rounded-md !focus:outline-none !focus:ring-2 !focus:ring-green-500 !focus:border-transparent',
-  error: '!w-full !px-3 !py-2 !border !border-red-300 !rounded-md !focus:outline-none !focus:ring-2 !focus:ring-red-500 !focus:border-transparent',
+  base: '!w-full !px-3 !py-2 !border !border-gray-300 dark:!border-gray-700 dark:!bg-gray-900 dark:!text-gray-100 !rounded-md !focus:outline-none !focus:ring-2 !focus:ring-green-500 !focus:border-transparent',
+  error: '!w-full !px-3 !py-2 !border !border-red-300 dark:!border-red-700 dark:!bg-gray-900 dark:!text-gray-100 !rounded-md !focus:outline-none !focus:ring-2 !focus:ring-red-500 !focus:border-transparent',
 };
+
+// Crossmint dashboard-configured `configOverride` id that subsidizes onramp/memecoin fees.
+export const SUBSIDIZE_FEES_CONFIG_OVERRIDE_ID = '672380f5-1ef7-4539-a92e-94bf1bcd4e5f';
 
 // Utility constants
 export const BALANCE_DECIMAL_PLACES = 6;

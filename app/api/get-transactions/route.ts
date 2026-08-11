@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Server API key not configured' }, { status: 500 });
     }
 
-    const url = `https://staging.crossmint.com/api/2022-06-09/wallets/${walletAddress}/transactions?page=${page}&perPage=${perPage}`;
+    const url = `https://staging.crossmint.com/api/2025-06-09/wallets/${walletAddress}/transactions?page=${page}&perPage=${perPage}`;
     
     const response = await fetch(url, {
       method: 'GET',

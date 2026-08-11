@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useAccount, useSignMessage } from 'wagmi';
 import { useWallet } from '@crossmint/client-sdk-react-ui';
 import { buttonStyles, cardStyles } from '@/lib/constants';
 import { useConfigStatus } from './ConfigurationStatus';
+import { apiFetch } from '@/lib/client-api';
+import { useApiInspector, useSetActiveFlow } from '@/lib/dev-inspector/ApiInspectorContext';
 
 interface Transaction {
   id: string;
@@ -42,15 +43,11 @@ interface Transaction {
 }
 
 interface ViewTransactionsProps {
-  onShowContent: (content: React.ReactNode) => void;
-  isActive: boolean;
   walletAddress?: string; // Optional - if not provided, uses connected wallet
 }
 
-function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = false, onBackToAgent }: { walletAddress?: string; onShowContent: (content: React.ReactNode) => void; isFromAgent?: boolean; onBackToAgent?: () => void }) {
+function ViewTransactionsForm({ walletAddress, isFromAgent = false }: { walletAddress?: string; isFromAgent?: boolean }) {
   const { wallet } = useWallet();
-  const { address: externalWallet } = useAccount();
-  const { signMessageAsync } = useSignMessage();
   const [localIsLoading, setIsLoading] = useState(false);
   const [localTransactions, setLocalTransactions] = useState<Transaction[]>([]);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -60,6 +57,8 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
   const [approvingTxId, setApprovingTxId] = useState<string | null>(null);
   const [approvalErrors, setApprovalErrors] = useState<Record<string, string | null>>({});
   const pollIntervalRef = useRef<any>(null);
+  const { log } = useApiInspector();
+  useSetActiveFlow(isFromAgent ? "agents" : "wallets:transactions");
 
   const fetchTransactions = async (page: number) => {
     const currentWalletAddress = walletAddress || wallet?.address;
@@ -72,7 +71,7 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
     setLocalError(null);
 
     try {
-      const response = await fetch('/api/get-transactions', {
+      const response = await apiFetch('/api/get-transactions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -82,7 +81,7 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
           page,
           perPage: localPerPage,
         }),
-      });
+      }, log);
 
       const data = await response.json();
 
@@ -113,13 +112,13 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'success':
-        return 'bg-green-100 text-green-800';
+        return 'bg-green-100 text-green-800 dark:bg-green-500/10 dark:text-green-400';
       case 'awaiting-approval':
-        return 'bg-yellow-100 text-yellow-800';
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/10 dark:text-yellow-400';
       case 'failed':
-        return 'bg-red-100 text-red-800';
+        return 'bg-red-100 text-red-800 dark:bg-red-500/10 dark:text-red-400';
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300';
     }
   };
 
@@ -153,7 +152,6 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
     if (!signerAddr) return false;
     const allowed: string[] = [];
     if (wallet?.address) allowed.push(wallet.address.toLowerCase());
-    if (externalWallet) allowed.push(externalWallet.toLowerCase());
     return allowed.includes(signerAddr);
   };
 
@@ -182,34 +180,26 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
     setApprovingTxId(txId);
     setApprovalErrors(prev => ({ ...prev, [txId]: null }));
     try {
-      const signerAddr = getSignerAddress(signer);
-      const isExternalSigner = externalWallet ? (signerAddr === externalWallet.toLowerCase()) : false;
-
+      // Sign with Crossmint smart wallet
+      const { EVMWallet } = await import('@crossmint/client-sdk-react-ui');
+      const evmWallet = EVMWallet.from(wallet);
       let sig: string | undefined;
-      if (isExternalSigner && signMessageAsync) {
-        // Sign with connected external wallet
-        sig = await signMessageAsync({ message });
-      } else {
-        // Sign with Crossmint smart wallet
-        const { EVMWallet } = await import('@crossmint/client-sdk-react-ui');
-        const evmWallet = EVMWallet.from(wallet);
-        try {
-          sig = await (evmWallet as any).signMessage(message);
-        } catch {
-          sig = await (evmWallet as any).signMessage?.({ message });
-        }
+      try {
+        sig = await (evmWallet as any).signMessage(message);
+      } catch {
+        sig = await (evmWallet as any).signMessage?.({ message });
       }
       if (!sig) throw new Error('Signature not produced');
-      const res = await fetch('/api/agent-approval', {
+      const res = await apiFetch('/api/agent-approval', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           agentWalletAddress: walletAddress,
           transactionId: txId,
-          signerAddress: (isExternalSigner && externalWallet) ? externalWallet : wallet.address,
+          signerAddress: wallet.address,
           signature: sig,
         }),
-      });
+      }, log);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data?.error || data?.message || 'Approval failed');
@@ -219,14 +209,6 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
       setApprovalErrors(prev => ({ ...prev, [txId]: e?.message || 'Approval failed' }));
     } finally {
       setApprovingTxId(null);
-    }
-  };
-
-  const handleBackToOptions = () => {
-    if (isFromAgent && onBackToAgent) {
-      onBackToAgent();
-    } else {
-      onShowContent(null);
     }
   };
 
@@ -256,7 +238,7 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
           // Poll each expanded awaiting tx via status endpoint (cheap, avoids full list refresh)
           const updates = await Promise.all(
             expandedAwaiting.map(async (txId) => {
-              const res = await fetch(`/api/agent-transaction?agentWalletAddress=${encodeURIComponent(walletAddress)}&transactionId=${encodeURIComponent(txId)}`);
+              const res = await apiFetch(`/api/agent-transaction?agentWalletAddress=${encodeURIComponent(walletAddress)}&transactionId=${encodeURIComponent(txId)}`, undefined, log);
               const data = await res.json().catch(() => ({}));
               if (!res.ok) return null;
               return { txId, data } as any;
@@ -320,61 +302,61 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
         <h2 className="text-xl font-semibold">View Transactions</h2>
         <button
           type="button"
-          onClick={handleBackToOptions}
-          className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50"
+          onClick={() => fetchTransactions(localCurrentPage)}
+          className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded-md hover:bg-gray-50 dark:hover:bg-gray-800 dark:text-gray-300"
         >
-          {isFromAgent ? 'Back to Agent' : 'Back'}
+          Refresh
         </button>
       </div>
 
       {walletAddress && (
-        <div className="mb-4 p-3 bg-green-50 rounded-lg">
-          <p className="text-sm text-green-800">
+        <div className="mb-4 p-3 bg-green-50 dark:bg-green-500/10 rounded-lg">
+          <p className="text-sm text-green-800 dark:text-green-400">
             <span className="font-medium">Wallet:</span> {walletAddress}
           </p>
         </div>
       )}
 
       {localError && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-red-700">{localError}</p>
+        <div className="mb-4 p-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-lg">
+          <p className="text-red-700 dark:text-red-400">{localError}</p>
         </div>
       )}
 
       {localIsLoading ? (
         <div className="text-center py-8">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto"></div>
-          <p className="mt-2 text-gray-600">Loading transactions...</p>
+          <p className="mt-2 text-gray-600 dark:text-gray-400">Loading transactions...</p>
         </div>
       ) : localTransactions.length === 0 ? (
         <div className="text-center py-8">
-          <p className="text-gray-600">No transactions found for this wallet.</p>
+          <p className="text-gray-600 dark:text-gray-400">No transactions found for this wallet.</p>
         </div>
       ) : (
         <div className="space-y-4">
           {localTransactions.map((transaction) => (
-            <div key={transaction.id} className="border border-gray-200 rounded-lg overflow-hidden">
+            <div key={transaction.id} className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
               {/* Transaction Header - Always Visible */}
-              <div 
-                className="p-4 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors"
+              <div
+                className="p-4 bg-gray-50 dark:bg-gray-800/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                 onClick={() => toggleTransactionExpansion(transaction.id)}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-4">
                     <div className="flex-1">
                       <div className="flex items-center space-x-2">
-                        <span className="text-sm font-mono text-gray-600">{transaction.id}</span>
+                        <span className="text-sm font-mono text-gray-600 dark:text-gray-400">{transaction.id}</span>
                         <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(transaction.status)}`}>
                           {transaction.status}
                         </span>
                       </div>
-                      <p className="text-xs text-gray-500 mt-1">
+                      <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
                         Created: {formatDate(transaction.createdAt)}
                       </p>
                     </div>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <span className="text-sm text-gray-500">
+                    <span className="text-sm text-gray-500 dark:text-gray-500">
                       {localExpandedTransactions.has(transaction.id) ? '▼' : '▶'}
                     </span>
                   </div>
@@ -383,15 +365,15 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
 
               {/* Transaction Details - Expandable */}
               {localExpandedTransactions.has(transaction.id) && (
-                <div className="p-4 border-t border-gray-200 bg-white">
+                <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
                   <div className="space-y-4">
                     {/* Basic Info */}
                     <div>
-                      <h4 className="font-medium text-gray-900 mb-2">Transaction Details</h4>
+                      <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Transaction Details</h4>
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
                           <span className="font-medium">ID:</span>
-                          <span className="ml-2 font-mono text-gray-600">{transaction.id}</span>
+                          <span className="ml-2 font-mono text-gray-600 dark:text-gray-400">{transaction.id}</span>
                         </div>
                         <div>
                           <span className="font-medium">Status:</span>
@@ -401,12 +383,12 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
                         </div>
                         <div>
                           <span className="font-medium">Created:</span>
-                          <span className="ml-2 text-gray-600">{formatDate(transaction.createdAt)}</span>
+                          <span className="ml-2 text-gray-600 dark:text-gray-400">{formatDate(transaction.createdAt)}</span>
                         </div>
                         {transaction.completedAt && (
                           <div>
                             <span className="font-medium">Completed:</span>
-                            <span className="ml-2 text-gray-600">{formatDate(transaction.completedAt)}</span>
+                            <span className="ml-2 text-gray-600 dark:text-gray-400">{formatDate(transaction.completedAt)}</span>
                           </div>
                         )}
                       </div>
@@ -415,11 +397,11 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
                     {/* Success Transaction Info */}
                     {transaction.status === 'success' && transaction.onChain?.txId && (
                       <div>
-                        <h4 className="font-medium text-gray-900 mb-2">Transaction Hash</h4>
+                        <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Transaction Hash</h4>
                         <div className="space-y-2">
                           <div>
                             <span className="font-medium text-sm">Tx ID:</span>
-                            <span className="ml-2 font-mono text-sm text-gray-600 break-all">
+                            <span className="ml-2 font-mono text-sm text-gray-600 dark:text-gray-400 break-all">
                               {transaction.onChain.txId}
                             </span>
                           </div>
@@ -429,7 +411,7 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
                                 href={transaction.onChain.explorerLink}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-green-600 hover:text-green-800 text-sm"
+                                className="text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300 text-sm"
                               >
                                 View on Explorer →
                               </a>
@@ -473,20 +455,20 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
                     {/* Send Params */}
                     {transaction.sendParams && (
                       <div>
-                        <h4 className="font-medium text-gray-900 mb-2">Send Parameters</h4>
-                        <div className="bg-gray-50 p-3 rounded text-sm">
+                        <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Send Parameters</h4>
+                        <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded text-sm">
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <span className="font-medium">Token:</span>
-                              <span className="ml-2 text-gray-600">{transaction.sendParams.token}</span>
+                              <span className="ml-2 text-gray-600 dark:text-gray-400">{transaction.sendParams.token}</span>
                             </div>
                             <div>
                               <span className="font-medium">Amount:</span>
-                              <span className="ml-2 text-gray-600">{transaction.sendParams.params.amount}</span>
+                              <span className="ml-2 text-gray-600 dark:text-gray-400">{transaction.sendParams.params.amount}</span>
                             </div>
                             <div className="col-span-2">
                               <span className="font-medium">Recipient:</span>
-                              <span className="ml-2 font-mono text-gray-600 break-all">
+                              <span className="ml-2 font-mono text-gray-600 dark:text-gray-400 break-all">
                                 {transaction.sendParams.params.recipient}
                               </span>
                             </div>
@@ -497,16 +479,16 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
 
                     {/* Approvals */}
                     <div>
-                      <h4 className="font-medium text-gray-900 mb-2">Approvals</h4>
+                      <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Approvals</h4>
                       <div className="space-y-3">
                         {transaction.approvals.pending.length > 0 && (
                           <div>
-                            <h5 className="text-sm font-medium text-yellow-700 mb-2">Pending ({transaction.approvals.pending.length})</h5>
+                            <h5 className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mb-2">Pending ({transaction.approvals.pending.length})</h5>
                             <div className="space-y-2">
                               {transaction.approvals.pending.map((approval, index) => (
-                                <div key={index} className="bg-yellow-50 p-2 rounded text-xs">
+                                <div key={index} className="bg-yellow-50 dark:bg-yellow-500/10 p-2 rounded text-xs">
                                   <div className="font-medium">Signer: {formatSigner(approval.signer)}</div>
-                                  <div className="font-mono text-gray-600 break-all mt-1">
+                                  <div className="font-mono text-gray-600 dark:text-gray-400 break-all mt-1">
                                     Message: {approval.message}
                                   </div>
                                   {isFromAgent && signerMatchesWallet(approval.signer) && (
@@ -524,7 +506,7 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
                                         {approvingTxId === transaction.id ? 'Approving…' : 'Approve'}
                                       </button>
                                       {approvalErrors[transaction.id] && (
-                                        <span className="text-red-600">{approvalErrors[transaction.id]}</span>
+                                        <span className="text-red-600 dark:text-red-400">{approvalErrors[transaction.id]}</span>
                                       )}
                                     </div>
                                   )}
@@ -536,15 +518,15 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
 
                         {transaction.approvals.submitted.length > 0 && (
                           <div>
-                            <h5 className="text-sm font-medium text-green-700 mb-2">Submitted ({transaction.approvals.submitted.length})</h5>
+                            <h5 className="text-sm font-medium text-green-700 dark:text-green-400 mb-2">Submitted ({transaction.approvals.submitted.length})</h5>
                             <div className="space-y-2">
                               {transaction.approvals.submitted.map((approval, index) => (
-                                <div key={index} className="bg-green-50 p-2 rounded text-xs">
+                                <div key={index} className="bg-green-50 dark:bg-green-500/10 p-2 rounded text-xs">
                                   <div className="font-medium">Signer: {formatSigner(approval.signer)}</div>
-                                  <div className="font-mono text-gray-600 break-all mt-1">
+                                  <div className="font-mono text-gray-600 dark:text-gray-400 break-all mt-1">
                                     Message: {approval.message}
                                   </div>
-                                  <div className="text-gray-500 mt-1">
+                                  <div className="text-gray-500 dark:text-gray-500 mt-1">
                                     Submitted: {formatDate(approval.submittedAt)}
                                   </div>
                                 </div>
@@ -558,36 +540,36 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
                     {/* Params - Expandable */}
                     <div>
                       <details className="group">
-                        <summary className="cursor-pointer font-medium text-gray-900 mb-2">
+                        <summary className="cursor-pointer font-medium text-gray-900 dark:text-gray-100 mb-2">
                           Params
                         </summary>
-                        <div className="mt-2 bg-gray-50 p-3 rounded text-sm">
+                        <div className="mt-2 bg-gray-50 dark:bg-gray-800 p-3 rounded text-sm">
                           <div className="space-y-2">
                             <div>
                               <span className="font-medium">Chain:</span>
-                              <span className="ml-2 text-gray-600">{transaction.params.chain}</span>
+                              <span className="ml-2 text-gray-600 dark:text-gray-400">{transaction.params.chain}</span>
                             </div>
                             <div>
                               <span className="font-medium">Signer:</span>
-                              <span className="ml-2 font-mono text-gray-600 break-all">{transaction.params.signer}</span>
+                              <span className="ml-2 font-mono text-gray-600 dark:text-gray-400 break-all">{transaction.params.signer}</span>
                             </div>
                             <div>
                               <span className="font-medium">Calls:</span>
                               <div className="mt-1 space-y-1">
                                 {transaction.params.calls.map((call, index) => (
-                                  <div key={index} className="bg-white p-2 rounded border">
+                                  <div key={index} className="bg-white dark:bg-gray-900 p-2 rounded border dark:border-gray-800">
                                     <div className="grid grid-cols-2 gap-2 text-xs">
                                       <div>
                                         <span className="font-medium">To:</span>
-                                        <span className="ml-1 font-mono text-gray-600 break-all">{call.to}</span>
+                                        <span className="ml-1 font-mono text-gray-600 dark:text-gray-400 break-all">{call.to}</span>
                                       </div>
                                       <div>
                                         <span className="font-medium">Value:</span>
-                                        <span className="ml-1 font-mono text-gray-600">{call.value}</span>
+                                        <span className="ml-1 font-mono text-gray-600 dark:text-gray-400">{call.value}</span>
                                       </div>
                                       <div className="col-span-2">
                                         <span className="font-medium">Data:</span>
-                                        <span className="ml-1 font-mono text-gray-600 break-all text-xs">{call.data}</span>
+                                        <span className="ml-1 font-mono text-gray-600 dark:text-gray-400 break-all text-xs">{call.data}</span>
                                       </div>
                                     </div>
                                   </div>
@@ -603,26 +585,26 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
                     {transaction.onChain && (
                       <div>
                         <details className="group">
-                          <summary className="cursor-pointer font-medium text-gray-900 mb-2">
+                          <summary className="cursor-pointer font-medium text-gray-900 dark:text-gray-100 mb-2">
                             OnChain Data
                           </summary>
-                          <div className="mt-2 bg-gray-50 p-3 rounded text-sm">
+                          <div className="mt-2 bg-gray-50 dark:bg-gray-800 p-3 rounded text-sm">
                             <div className="space-y-2">
                               <div>
                                 <span className="font-medium">User Operation Hash:</span>
-                                <span className="ml-2 font-mono text-gray-600 break-all">{transaction.onChain.userOperationHash}</span>
+                                <span className="ml-2 font-mono text-gray-600 dark:text-gray-400 break-all">{transaction.onChain.userOperationHash}</span>
                               </div>
                               <div>
                                 <span className="font-medium">Sender:</span>
-                                <span className="ml-2 font-mono text-gray-600 break-all">{transaction.onChain.userOperation.sender}</span>
+                                <span className="ml-2 font-mono text-gray-600 dark:text-gray-400 break-all">{transaction.onChain.userOperation.sender}</span>
                               </div>
                               <div>
                                 <span className="font-medium">Nonce:</span>
-                                <span className="ml-2 font-mono text-gray-600 break-all">{transaction.onChain.userOperation.nonce}</span>
+                                <span className="ml-2 font-mono text-gray-600 dark:text-gray-400 break-all">{transaction.onChain.userOperation.nonce}</span>
                               </div>
                               <div>
                                 <span className="font-medium">Call Data:</span>
-                                <span className="ml-2 font-mono text-gray-600 break-all text-xs">{transaction.onChain.userOperation.callData}</span>
+                                <span className="ml-2 font-mono text-gray-600 dark:text-gray-400 break-all text-xs">{transaction.onChain.userOperation.callData}</span>
                               </div>
                             </div>
                           </div>
@@ -641,18 +623,18 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
               type="button"
               onClick={() => fetchTransactions(localCurrentPage - 1)}
               disabled={localCurrentPage <= 1 || localIsLoading}
-              className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded-md hover:bg-gray-50 dark:hover:bg-gray-800 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Previous
             </button>
-            <span className="text-sm text-gray-600">
+            <span className="text-sm text-gray-600 dark:text-gray-400">
               Page {localCurrentPage}
             </span>
             <button
               type="button"
               onClick={() => fetchTransactions(localCurrentPage + 1)}
               disabled={localTransactions.length < localPerPage || localIsLoading}
-              className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded-md hover:bg-gray-50 dark:hover:bg-gray-800 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Next
             </button>
@@ -663,76 +645,57 @@ function ViewTransactionsForm({ walletAddress, onShowContent, isFromAgent = fals
   );
 }
 
-export default function ViewTransactions({ onShowContent, isActive, walletAddress }: ViewTransactionsProps) {
+export default function ViewTransactions({ walletAddress }: ViewTransactionsProps) {
   const { wallet } = useWallet();
-  const { configStatus, mounted } = useConfigStatus();
+  const { configStatus, mounted, loading } = useConfigStatus();
 
   const isServerApiKeyConfigured = mounted ? (configStatus?.serverApiKey ?? false) : false;
   const targetWalletAddress = walletAddress || wallet?.address;
 
-  // If walletAddress is provided, show the form directly
+  // If walletAddress is provided, this is an agent wallet's transaction view
   if (walletAddress) {
-    return <ViewTransactionsForm walletAddress={walletAddress} onShowContent={onShowContent} isFromAgent={true} onBackToAgent={() => onShowContent(null)} />;
+    return <ViewTransactionsForm walletAddress={walletAddress} isFromAgent={true} />;
   }
 
-  const handleClick = () => {
-    if (!isServerApiKeyConfigured) {
-      onShowContent(
-        <div className={cardStyles.base}>
-          <h2 className="text-xl font-semibold mb-4 text-center text-red-600">Server API Key Not Configured</h2>
-          <div className={cardStyles.error}>
-            <p className="text-red-700 mb-2">
-              View Transactions functionality requires a server API key. Please add the following environment variable:
-            </p>
-            <code className="bg-red-100 text-red-800 px-2 py-1 rounded text-sm block">
-              CROSSMINT_SERVER_API_KEY=your-server-api-key
-            </code>
-            <p className="text-red-600 text-sm mt-2">
-              Add this to your <code className="bg-red-100 px-1 rounded">.env.local</code> file and restart the development server.
-            </p>
-          </div>
+  if (!mounted || loading) {
+    return (
+      <div className="flex h-40 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-green-600" />
+      </div>
+    );
+  }
+
+  if (!isServerApiKeyConfigured) {
+    return (
+      <div className={cardStyles.base}>
+        <h2 className="text-xl font-semibold mb-4 text-center text-red-600">Server API Key Not Configured</h2>
+        <div className={cardStyles.error}>
+          <p className="text-red-700 mb-2">
+            View Transactions functionality requires a server API key. Please add the following environment variable:
+          </p>
+          <code className="bg-red-100 dark:bg-red-500/10 text-red-800 dark:text-red-400 px-2 py-1 rounded text-sm block">
+            CROSSMINT_SERVER_API_KEY=your-server-api-key
+          </code>
+          <p className="text-red-600 text-sm mt-2">
+            Add this to your <code className="bg-red-100 dark:bg-red-500/10 px-1 rounded">.env.local</code> file and restart the development server.
+          </p>
         </div>
-      );
-      return;
-    }
+      </div>
+    );
+  }
 
-    if (!targetWalletAddress) {
-      onShowContent(
-        <div className={cardStyles.base}>
-          <h2 className="text-xl font-semibold mb-4 text-center text-red-600">No Wallet Address</h2>
-          <div className={cardStyles.error}>
-            <p className="text-red-700">
-              No wallet address available. Please connect a wallet or provide a wallet address.
-            </p>
-          </div>
+  if (!targetWalletAddress) {
+    return (
+      <div className={cardStyles.base}>
+        <h2 className="text-xl font-semibold mb-4 text-center text-red-600">No Wallet Address</h2>
+        <div className={cardStyles.error}>
+          <p className="text-red-700">
+            No wallet address available. Please connect a wallet or provide a wallet address.
+          </p>
         </div>
-      );
-      return;
-    }
+      </div>
+    );
+  }
 
-    onShowContent(<ViewTransactionsForm walletAddress={targetWalletAddress} onShowContent={onShowContent} isFromAgent={false} onBackToAgent={() => onShowContent(null)} />);
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      data-testid="view-transactions"
-      className={
-        !isServerApiKeyConfigured
-          ? buttonStyles.disabled
-          : isActive 
-            ? `${buttonStyles.primary} ring-2 ring-green-500`
-            : buttonStyles.primary
-      }
-      disabled={!isServerApiKeyConfigured}
-      title={
-        !isServerApiKeyConfigured 
-          ? 'Server API key not configured' 
-          : undefined
-      }
-    >
-      View Transactions
-    </button>
-  );
-} 
+  return <ViewTransactionsForm walletAddress={targetWalletAddress} isFromAgent={false} />;
+}

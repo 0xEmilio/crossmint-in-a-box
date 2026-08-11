@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { useWallet, useAuth } from '@crossmint/client-sdk-react-ui';
+import { useWallet, useCrossmintAuth as useAuth } from '@crossmint/client-sdk-react-ui';
 import { 
   buttonStyles, 
   cardStyles, 
@@ -11,396 +11,299 @@ import {
   WORLDSTORE_RETRY_LIMIT,
   RETRY_INTERVAL
 } from '@/lib/constants';
-import { formatBalance, getChainDisplayName, parseBalanceToFloat } from '@/lib/utils';
 import { useConfigStatus } from './ConfigurationStatus';
+import { useAgentWallet as useAgentWalletInfo } from '@/lib/hooks/useAgentWallet';
+import { useTokenBalance } from '@/lib/hooks/useTokenBalance';
+import { usePolling } from '@/lib/hooks/usePolling';
+import { apiFetch } from '@/lib/client-api';
+import { useApiInspector, useSetActiveFlow } from '@/lib/dev-inspector/ApiInspectorContext';
 
-interface WorldstoreFlowProps {
-  onShowContent: (content: React.ReactNode) => void;
-  isActive: boolean;
-}
-
-export function WorldstoreFlow({ onShowContent, isActive }: WorldstoreFlowProps) {
-  const { wallet, getOrCreateWallet } = useWallet();
-  const { user } = useAuth();
-  const { configStatus, mounted } = useConfigStatus();
+export function WorldstoreFlow() {
+  const { configStatus, mounted, loading } = useConfigStatus();
 
   const isServerApiKeyConfigured = mounted ? (configStatus?.serverApiKey ?? false) : false;
 
-  const handleClick = () => {
-    if (!isServerApiKeyConfigured) {
-      onShowContent(
-        <div className={cardStyles.base}>
-          <h2 className="text-xl font-semibold mb-4 text-center text-red-600">Server API Key Not Configured</h2>
-          <div className={cardStyles.error}>
-            <p className="text-red-700 mb-2">
-              The Worldstore feature requires a server API key. Please add the following environment variable:
-            </p>
-            <code className="bg-red-100 text-red-800 px-2 py-1 rounded text-sm block">
-              CROSSMINT_SERVER_API_KEY=your-server-api-key
-            </code>
-            <p className="text-red-600 text-sm mt-2">
-              Add this to your <code className="bg-red-100 px-1 rounded">.env.local</code> file and restart the development server.
-            </p>
-          </div>
+  if (!mounted || loading) {
+    return (
+      <div className="flex h-40 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-green-600" />
+      </div>
+    );
+  }
+
+  if (!isServerApiKeyConfigured) {
+    return (
+      <div className={cardStyles.base}>
+        <h2 className="text-xl font-semibold mb-4 text-center text-red-600">Server API Key Not Configured</h2>
+        <div className={cardStyles.error}>
+          <p className="text-red-700 mb-2">
+            The Worldstore feature requires a server API key. Please add the following environment variable:
+          </p>
+          <code className="bg-red-100 dark:bg-red-500/20 text-red-800 dark:text-red-300 px-2 py-1 rounded text-sm block">
+            CROSSMINT_SERVER_API_KEY=your-server-api-key
+          </code>
+          <p className="text-red-600 dark:text-red-400 text-sm mt-2">
+            Add this to your <code className="bg-red-100 dark:bg-red-500/20 dark:text-red-300 px-1 rounded">.env.local</code> file and restart the development server.
+          </p>
         </div>
-      );
+      </div>
+    );
+  }
+
+  return <WorldstoreForm />;
+}
+
+function WorldstoreForm() {
+  const { wallet, getWallet, createWallet } = useWallet();
+  const { user } = useAuth();
+  const { log } = useApiInspector();
+  useSetActiveFlow('worldstore');
+  const [step, setStep] = React.useState(1);
+  const [email, setEmail] = React.useState(user?.email || '');
+  const [name, setName] = React.useState('');
+  const [address1, setAddress1] = React.useState('');
+  const [address2, setAddress2] = React.useState('');
+  const [city, setCity] = React.useState('');
+  const [state, setState] = React.useState('');
+  const [zip, setZip] = React.useState('');
+  const [item, setItem] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+  const [quoteLoading, setQuoteLoading] = React.useState(false);
+  const [quote, setQuote] = React.useState<any>(null);
+  const [result, setResult] = React.useState<any>(null);
+  const [error, setError] = React.useState('');
+  const [useAgentWallet, setUseAgentWallet] = React.useState(false);
+  const [pendingStatusCheck, setPendingStatusCheck] = React.useState<{ orderId: string; transaction: any } | null>(null);
+
+  const { hasAgentWallet, agentWalletAddress } = useAgentWalletInfo(wallet?.address, log);
+  const { formatted: agentBalance, loading: agentBalanceLoading } = useTokenBalance(agentWalletAddress || undefined, DEFAULT_CHAIN, "usdc", log);
+  const { formatted: balance, loading: balanceLoading, refetch: fetchBalance } = useTokenBalance(wallet?.address, DEFAULT_CHAIN, "usdc", log);
+
+  React.useEffect(() => {
+    if (!hasAgentWallet) setUseAgentWallet(false);
+  }, [hasAgentWallet]);
+
+  React.useEffect(() => {
+    if (quote && step === 4) {
+      fetchBalance();
+    }
+  }, [quote, step]);
+
+  const getQuote = async () => {
+    if (!wallet?.address) {
+      setError('Wallet not connected');
       return;
     }
-    const WorldstoreForm = () => {
-      const [step, setStep] = React.useState(1);
-      const [email, setEmail] = React.useState(user?.email || '');
-      const [name, setName] = React.useState('');
-      const [address1, setAddress1] = React.useState('');
-      const [address2, setAddress2] = React.useState('');
-      const [city, setCity] = React.useState('');
-      const [state, setState] = React.useState('');
-      const [zip, setZip] = React.useState('');
-      const [item, setItem] = React.useState('');
-      const [loading, setLoading] = React.useState(false);
-      const [quoteLoading, setQuoteLoading] = React.useState(false);
-      const [quote, setQuote] = React.useState<any>(null);
-      const [result, setResult] = React.useState<any>(null);
-      const [error, setError] = React.useState('');
-      const [balance, setBalance] = React.useState<string>('0');
-      const [balanceLoading, setBalanceLoading] = React.useState(false);
-      const [useAgentWallet, setUseAgentWallet] = React.useState(false);
-      const [agentWalletAddress, setAgentWalletAddress] = React.useState<string>('');
-      const [agentBalance, setAgentBalance] = React.useState<string>('0');
-      const [agentBalanceLoading, setAgentBalanceLoading] = React.useState(false);
-      const [hasAgentWallet, setHasAgentWallet] = React.useState(false);
 
-      React.useEffect(() => {
-        if (wallet?.address) {
-          fetchBalance();
-          fetchAgentWallet();
-        }
-      }, [wallet?.address]);
+    setQuoteLoading(true);
+    setError('');
 
-      React.useEffect(() => {
-        if (quote && step === 4) {
-          fetchBalance();
-        }
-      }, [quote, step]);
-
-      const fetchBalance = async () => {
-        if (!wallet?.address) return;
-        
-        setBalanceLoading(true);
-        try {
-          const response = await fetch(`/api/wallet-balances?wallet=${wallet.address}`);
-          if (!response.ok) throw new Error('Failed to fetch balance');
-          
-          const data = await response.json();
-          const usdcData = data.find((token: any) => token.token === 'usdc');
-          const chainBalance = usdcData?.balances?.[DEFAULT_CHAIN] || '0';
-          const formattedBalance = usdcData ? 
-            parseBalanceToFloat(chainBalance, usdcData.decimals).toFixed(2) : '0';
-          
-          setBalance(formattedBalance);
-        } catch (err) {
-          console.error('Failed to fetch balance:', err);
-          setBalance('0');
-        } finally {
-          setBalanceLoading(false);
-        }
-      };
-
-      const fetchAgentWallet = async () => {
-        try {
-          if (!wallet?.address) return;
-          const response = await fetch('/api/get-agent-wallets', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ walletAddress: wallet.address })
-          });
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.error || 'Failed to get agent wallets');
-          const signers = data.signers || [];
-          if (signers.length > 0) {
-            setHasAgentWallet(true);
-            const address = signers[0].address;
-            setAgentWalletAddress(address);
-            await fetchAgentBalance(address);
-          } else {
-            setHasAgentWallet(false);
-            setUseAgentWallet(false);
+    try {
+      const response = await apiFetch('/api/worldstore-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asin: item,
+          walletAddress: hasAgentWallet && useAgentWallet ? agentWalletAddress : wallet.address,
+          recipient: {
+            email,
+            name,
+            line1: address1,
+            line2: address2,
+            city,
+            state,
+            postalCode: zip,
+            country: 'US'
           }
-        } catch (e) {
-          console.error('Failed to fetch agent wallets', e);
-          setHasAgentWallet(false);
-          setUseAgentWallet(false);
+        })
+      }, log);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to get quote');
+      }
+
+      const data = await response.json();
+      setQuote(data);
+      setStep(4);
+    } catch (err) {
+      console.error('Quote failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to get quote');
+    } finally {
+      setQuoteLoading(false);
+    }
+  };
+
+  const handleOrder = async () => {
+    if (!wallet || !quote) return;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const serializedTransaction = quote.order?.payment?.preparation?.serializedTransaction;
+      const payerAddress = quote.order?.payment?.preparation?.payerAddress;
+
+      if (!serializedTransaction || !payerAddress) {
+        throw new Error('Missing payment preparation data. Please try getting a new quote.');
+      }
+
+      let transactionResult: any = null;
+      if (hasAgentWallet && useAgentWallet) {
+        // Submit via Crossmint agent-transaction path with delegated signer
+        const res = await fetch('/api/agent-transaction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentWalletAddress: agentWalletAddress,
+            transaction: serializedTransaction,
+            signer: [`external-wallet:${wallet.address}`],
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || 'Agent transaction submit failed');
         }
-      };
-
-      const fetchAgentBalance = async (address: string) => {
-        setAgentBalanceLoading(true);
-        try {
-          const response = await fetch(`/api/wallet-balances?wallet=${address}`);
-          if (!response.ok) throw new Error('Failed to fetch agent balance');
-          const data = await response.json();
-          const usdcData = data.find((token: any) => token.token === 'usdc');
-          const chainBalance = usdcData?.balances?.[DEFAULT_CHAIN] || '0';
-          const formattedBalance = usdcData ? 
-            parseBalanceToFloat(chainBalance, usdcData.decimals).toFixed(2) : '0';
-          setAgentBalance(formattedBalance);
-        } catch (e) {
-          console.error('Failed to fetch agent balance', e);
-          setAgentBalance('0');
-        } finally {
-          setAgentBalanceLoading(false);
-        }
-      };
-
-      const getQuote = async () => {
-        if (!wallet?.address) {
-          setError('Wallet not connected');
-          return;
-        }
-
-        setQuoteLoading(true);
-        setError('');
-
-        try {
-          const response = await fetch('/api/worldstore-order', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              asin: item,
-              walletAddress: hasAgentWallet && useAgentWallet ? agentWalletAddress : wallet.address,
-              recipient: {
-                email,
-                name,
-                line1: address1,
-                line2: address2,
-                city,
-                state,
-                postalCode: zip,
-                country: 'US'
-              }
-            })
-          });
-
-          if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Failed to get quote');
-          }
-
-          const data = await response.json();
-          setQuote(data);
-          setStep(4);
-        } catch (err) {
-          console.error('Quote failed:', err);
-          setError(err instanceof Error ? err.message : 'Failed to get quote');
-        } finally {
-          setQuoteLoading(false);
-        }
-      };
-
-      const handleOrder = async () => {
-        if (!wallet || !quote) return;
-
-        setLoading(true);
-        setError('');
-
-        try {
-          const serializedTransaction = quote.order?.payment?.preparation?.serializedTransaction;
-          const payerAddress = quote.order?.payment?.preparation?.payerAddress;
-          
-          if (!serializedTransaction || !payerAddress) {
-            throw new Error('Missing payment preparation data. Please try getting a new quote.');
-          }
-
-          let transactionResult: any = null;
-          if (hasAgentWallet && useAgentWallet) {
-            // Submit via Crossmint agent-transaction path with delegated signer
-            const res = await fetch('/api/agent-transaction', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                agentWalletAddress: agentWalletAddress,
-                transaction: serializedTransaction,
-                signer: [`external-wallet:${wallet.address}`],
-              }),
-            });
-            const data = await res.json();
-            if (!res.ok) {
-              throw new Error(data?.error || 'Agent transaction submit failed');
-            }
-            transactionResult = {
-              hash: data?.hash || '',
-              transactionId: data?.id || data?.transactionId || '',
-              explorerLink: data?.explorerLink || '',
-            };
-          } else {
-            // Default: use client wallet to sign and send
-            let chainWallet = wallet;
-            if (wallet.chain !== DEFAULT_CHAIN) {
-              const newWallet = await getOrCreateWallet({
-                chain: DEFAULT_CHAIN as any,
-                signer: { type: DEFAULT_SIGNER_TYPE as any }
-              });
-              if (newWallet) {
-                chainWallet = newWallet;
-              } else {
-                throw new Error(`Failed to create wallet for ${DEFAULT_CHAIN}`);
-              }
-            }
-            const { EVMWallet } = await import('@crossmint/client-sdk-react-ui');
-            const evmWallet = EVMWallet.from(chainWallet);
-            const transactionInput = { transaction: serializedTransaction } as any;
-            transactionResult = await evmWallet.sendTransaction(transactionInput);
-          }
-          
-          setStep(5);
-          pollOrderStatus(quote.order.orderId, transactionResult);
-          
-        } catch (error) {
-          console.error('Order failed:', error);
-          setError(error instanceof Error ? error.message : 'Order failed');
-        } finally {
-          setLoading(false);
-        }
-      };
-
-      const pollOrderStatus = async (orderId: string, transaction: any) => {
-        let retries = 0;
-        
-        const poll = async () => {
-          try {
-            const response = await fetch(`/api/worldstore-status?orderId=${orderId}`);
-            if (!response.ok) throw new Error('Failed to check order status');
-            
-            const orderData = await response.json();
-            
-            if (orderData.payment?.status === 'completed') {
-              setResult({
-                orderStatus: 'completed',
-                orderData,
-                transaction
-              });
-              return;
-            }
-            
-            retries++;
-            if (retries >= WORLDSTORE_RETRY_LIMIT) {
-              setResult({
-                emailNotification: true,
-                orderData,
-                transaction
-              });
-              return;
-            }
-            
-            setTimeout(poll, RETRY_INTERVAL);
-          } catch (err) {
-            console.error('Status check failed:', err);
-            setResult({
-              emailNotification: true,
-              transaction
-            });
-          }
+        transactionResult = {
+          hash: data?.hash || '',
+          transactionId: data?.id || data?.transactionId || '',
+          explorerLink: data?.explorerLink || '',
         };
-        
-        poll();
-      };
-
-      const reset = () => {
-        setStep(1);
-        setEmail('');
-        setName('');
-        setAddress1('');
-        setAddress2('');
-        setCity('');
-        setState('');
-        setZip('');
-        setItem('');
-        setQuote(null);
-        setResult(null);
-        setError('');
-        setLoading(false);
-        setQuoteLoading(false);
-      };
-
-      const canContinue = (currentStep: number) => {
-        switch (currentStep) {
-          case 1: return email.trim() !== '';
-          case 2: return name.trim() !== '' && address1.trim() !== '' && city.trim() !== '' && state.trim() !== '' && zip.trim() !== '';
-          case 3: return item.trim() !== '';
-          default: return false;
+      } else {
+        // Default: use client wallet to sign and send
+        let chainWallet = wallet;
+        if (wallet.chain !== DEFAULT_CHAIN) {
+          const newWallet = (await getWallet({ chain: DEFAULT_CHAIN as any } as any))
+            || (await createWallet({ chain: DEFAULT_CHAIN as any, recovery: { type: "email" } } as any));
+          if (newWallet) {
+            chainWallet = newWallet;
+          } else {
+            throw new Error(`Failed to create wallet for ${DEFAULT_CHAIN}`);
+          }
         }
-      };
+        const { EVMWallet } = await import('@crossmint/client-sdk-react-ui');
+        const evmWallet = EVMWallet.from(chainWallet);
+        const transactionInput = { transaction: serializedTransaction } as any;
+        transactionResult = await evmWallet.sendTransaction(transactionInput);
+      }
 
-      const isInsufficientBalance = () => {
-        if (!quote?.order?.quote?.totalPrice?.amount) return false;
-        const totalCost = parseFloat(quote.order.quote.totalPrice.amount);
-        const userBalance = parseFloat(balance);
-        return userBalance < totalCost;
-      };
+      setStep(5);
+      setPendingStatusCheck({ orderId: quote.order.orderId, transaction: transactionResult });
 
-      return (
-        <WorldstoreFlowContent
-          step={step}
-          setStep={setStep}
-          email={email}
-          setEmail={setEmail}
-          name={name}
-          setName={setName}
-          address1={address1}
-          setAddress1={setAddress1}
-          address2={address2}
-          setAddress2={setAddress2}
-          city={city}
-          setCity={setCity}
-          state={state}
-          setState={setState}
-          zip={zip}
-          setZip={setZip}
-          item={item}
-          setItem={setItem}
-          loading={loading}
-          quoteLoading={quoteLoading}
-          quote={quote}
-          result={result}
-          error={error}
-          setError={setError}
-          balance={balance}
-          balanceLoading={balanceLoading}
-          useAgentWallet={useAgentWallet}
-          setUseAgentWallet={setUseAgentWallet}
-          hasAgentWallet={hasAgentWallet}
-          agentWalletAddress={agentWalletAddress}
-          agentBalance={agentBalance}
-          agentBalanceLoading={agentBalanceLoading}
-          userWalletAddress={wallet?.address}
-          fetchBalance={fetchBalance}
-          onGetQuote={getQuote}
-          onOrder={handleOrder}
-          onReset={reset}
-          onClose={() => onShowContent(null)}
-          canContinue={canContinue}
-          isInsufficientBalance={isInsufficientBalance}
-        />
-      );
-    };
+    } catch (error) {
+      console.error('Order failed:', error);
+      setError(error instanceof Error ? error.message : 'Order failed');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    onShowContent(<WorldstoreForm />);
+  usePolling(
+    async () => {
+      if (!pendingStatusCheck) return true;
+      try {
+        const response = await fetch(`/api/worldstore-status?orderId=${pendingStatusCheck.orderId}`);
+        if (!response.ok) throw new Error('Failed to check order status');
+
+        const orderData = await response.json();
+        if (orderData.payment?.status === 'completed') {
+          setResult({ orderStatus: 'completed', orderData, transaction: pendingStatusCheck.transaction });
+          return true;
+        }
+        return false;
+      } catch (err) {
+        console.error('Status check failed:', err);
+        setResult({ emailNotification: true, transaction: pendingStatusCheck.transaction });
+        return true;
+      }
+    },
+    {
+      enabled: !!pendingStatusCheck && !result,
+      intervalMs: RETRY_INTERVAL,
+      maxAttempts: WORLDSTORE_RETRY_LIMIT,
+      onMaxAttemptsReached: () => {
+        if (pendingStatusCheck) setResult({ emailNotification: true, transaction: pendingStatusCheck.transaction });
+      },
+    }
+  );
+
+  const reset = () => {
+    setStep(1);
+    setEmail('');
+    setName('');
+    setAddress1('');
+    setAddress2('');
+    setCity('');
+    setState('');
+    setZip('');
+    setItem('');
+    setQuote(null);
+    setResult(null);
+    setError('');
+    setLoading(false);
+    setQuoteLoading(false);
+    setPendingStatusCheck(null);
+  };
+
+  const canContinue = (currentStep: number) => {
+    switch (currentStep) {
+      case 1: return email.trim() !== '';
+      case 2: return name.trim() !== '' && address1.trim() !== '' && city.trim() !== '' && state.trim() !== '' && zip.trim() !== '';
+      case 3: return item.trim() !== '';
+      default: return false;
+    }
+  };
+
+  const isInsufficientBalance = () => {
+    if (!quote?.order?.quote?.totalPrice?.amount) return false;
+    const totalCost = parseFloat(quote.order.quote.totalPrice.amount);
+    const userBalance = parseFloat(balance);
+    return userBalance < totalCost;
   };
 
   return (
-    <button
-      onClick={handleClick}
-      className={
-        !isServerApiKeyConfigured
-          ? buttonStyles.disabled
-          : isActive 
-            ? buttonStyles.primary
-            : buttonStyles.secondary
-      }
-      disabled={!isServerApiKeyConfigured}
-      title={!isServerApiKeyConfigured ? 'Server API key not configured' : undefined}
-    >
-      Worldstore
-    </button>
+    <WorldstoreFlowContent
+      step={step}
+      setStep={setStep}
+      email={email}
+      setEmail={setEmail}
+      name={name}
+      setName={setName}
+      address1={address1}
+      setAddress1={setAddress1}
+      address2={address2}
+      setAddress2={setAddress2}
+      city={city}
+      setCity={setCity}
+      state={state}
+      setState={setState}
+      zip={zip}
+      setZip={setZip}
+      item={item}
+      setItem={setItem}
+      loading={loading}
+      quoteLoading={quoteLoading}
+      quote={quote}
+      result={result}
+      error={error}
+      setError={setError}
+      balance={balance}
+      balanceLoading={balanceLoading}
+      useAgentWallet={useAgentWallet}
+      setUseAgentWallet={setUseAgentWallet}
+      hasAgentWallet={hasAgentWallet}
+      agentWalletAddress={agentWalletAddress}
+      agentBalance={agentBalance}
+      agentBalanceLoading={agentBalanceLoading}
+      userWalletAddress={wallet?.address}
+      fetchBalance={fetchBalance}
+      onGetQuote={getQuote}
+      onOrder={handleOrder}
+      onReset={reset}
+      onClose={reset}
+      canContinue={canContinue}
+      isInsufficientBalance={isInsufficientBalance}
+    />
   );
 }
 
@@ -453,7 +356,7 @@ function WorldstoreFlowContent({
 
       {error && (
         <div className={cardStyles.error}>
-          <p className="text-red-700 break-words overflow-hidden">{error}</p>
+          <p className="text-red-700 dark:text-red-300 break-words overflow-hidden">{error}</p>
         </div>
       )}
 
@@ -461,7 +364,7 @@ function WorldstoreFlowContent({
         <div className="space-y-4">
           <h3 className="text-lg font-medium">Step 1: Email Receipt</h3>
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Email Address
             </label>
             <input
@@ -489,7 +392,7 @@ function WorldstoreFlowContent({
           <h3 className="text-lg font-medium">Step 2: Shipping Address</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Full Name
               </label>
               <input
@@ -502,7 +405,7 @@ function WorldstoreFlowContent({
               />
             </div>
             <div>
-              <label htmlFor="address1" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="address1" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Address Line 1
               </label>
               <input
@@ -515,7 +418,7 @@ function WorldstoreFlowContent({
               />
             </div>
             <div>
-              <label htmlFor="address2" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="address2" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Address Line 2 (Optional)
               </label>
               <input
@@ -527,7 +430,7 @@ function WorldstoreFlowContent({
               />
             </div>
             <div>
-              <label htmlFor="city" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="city" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 City
               </label>
               <input
@@ -540,7 +443,7 @@ function WorldstoreFlowContent({
               />
             </div>
             <div>
-              <label htmlFor="state" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="state" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 State
               </label>
               <input
@@ -553,7 +456,7 @@ function WorldstoreFlowContent({
               />
             </div>
             <div>
-              <label htmlFor="zip" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="zip" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 ZIP Code
               </label>
               <input
@@ -588,7 +491,7 @@ function WorldstoreFlowContent({
         <div className="space-y-4">
           <h3 className="text-lg font-medium">Step 3: What to Buy</h3>
           <div>
-            <label htmlFor="item" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="item" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Amazon ASIN or Product URL
             </label>
             <input
@@ -602,10 +505,10 @@ function WorldstoreFlowContent({
             />
           </div>
           {hasAgentWallet && (
-            <div className="p-3 bg-gray-50 rounded border">
-              <div className="mb-2 font-medium text-sm">Pay with</div>
+            <div className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded border dark:border-gray-800">
+              <div className="mb-2 font-medium text-sm dark:text-gray-100">Pay with</div>
               <div className="space-y-2">
-                <label className={`flex items-start justify-between p-3 rounded border ${!useAgentWallet ? 'ring-2 ring-green-500 border-green-400 bg-white' : 'border-gray-200'}`}>
+                <label className={`flex items-start justify-between p-3 rounded border ${!useAgentWallet ? 'ring-2 ring-green-500 border-green-400 bg-white dark:bg-gray-900' : 'border-gray-200 dark:border-gray-800'}`}>
                   <span className="flex items-start">
                     <input
                       type="radio"
@@ -615,13 +518,13 @@ function WorldstoreFlowContent({
                       className="mr-3 mt-1"
                     />
                     <span>
-                      <div className="text-sm font-medium">My wallet</div>
-                      <div className="text-xs text-gray-600 break-all">{userWalletAddress}</div>
-                      <div className="text-xs text-gray-700 mt-1">Balance: {balanceLoading ? 'Loading...' : `${balance} USDC`}</div>
+                      <div className="text-sm font-medium dark:text-gray-100">My wallet</div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 break-all">{userWalletAddress}</div>
+                      <div className="text-xs text-gray-700 dark:text-gray-300 mt-1">Balance: {balanceLoading ? 'Loading...' : `${balance} USDC`}</div>
                     </span>
                   </span>
                 </label>
-                <label className={`flex items-start justify-between p-3 rounded border ${useAgentWallet ? 'ring-2 ring-green-500 border-green-400 bg-white' : 'border-gray-200'}`}>
+                <label className={`flex items-start justify-between p-3 rounded border ${useAgentWallet ? 'ring-2 ring-green-500 border-green-400 bg-white dark:bg-gray-900' : 'border-gray-200 dark:border-gray-800'}`}>
                   <span className="flex items-start">
                     <input
                       type="radio"
@@ -631,9 +534,9 @@ function WorldstoreFlowContent({
                       className="mr-3 mt-1"
                     />
                     <span>
-                      <div className="text-sm font-medium">Agent wallet</div>
-                      <div className="text-xs text-gray-600 break-all">{agentWalletAddress}</div>
-                      <div className="text-xs text-gray-700 mt-1">Balance: {agentBalanceLoading ? 'Loading...' : `${agentBalance} USDC`}</div>
+                      <div className="text-sm font-medium dark:text-gray-100">Agent wallet</div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 break-all">{agentWalletAddress}</div>
+                      <div className="text-xs text-gray-700 dark:text-gray-300 mt-1">Balance: {agentBalanceLoading ? 'Loading...' : `${agentBalance} USDC`}</div>
                     </span>
                   </span>
                 </label>
@@ -661,26 +564,26 @@ function WorldstoreFlowContent({
       {step === 4 && quote && (
         <div className="space-y-4">
           <h3 className="text-lg font-medium">Step 4: Review Product</h3>
-          
+
           <div className="space-y-6">
             {quote.order?.lineItems?.[0] && (
-              <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
+              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-6 space-y-4">
                 <div className="flex space-x-4">
                   {quote.order.lineItems[0].metadata?.imageUrl && (
-                    <img 
-                      src={quote.order.lineItems[0].metadata.imageUrl} 
-                      alt="Product" 
+                    <img
+                      src={quote.order.lineItems[0].metadata.imageUrl}
+                      alt="Product"
                       className="w-24 h-24 object-cover rounded"
                     />
                   )}
                   <div className="flex-1">
-                    <h4 className="font-semibold text-gray-900 mb-2">
+                    <h4 className="font-semibold text-gray-900 dark:text-gray-100 mb-2">
                       {quote.order.lineItems[0].metadata?.name || 'Product'}
                     </h4>
-                    <p className="text-sm text-gray-600 mb-3">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
                       {quote.order.lineItems[0].metadata?.description || 'No description available'}
                     </p>
-                    <div className="space-y-1 text-sm">
+                    <div className="space-y-1 text-sm dark:text-gray-300">
                       <div className="flex justify-between">
                         <span>Item Price:</span>
                         <span className="font-medium">${quote.order.lineItems[0].quote?.charges?.unit?.amount || '0'}</span>
@@ -689,7 +592,7 @@ function WorldstoreFlowContent({
                         <span>Sales Tax:</span>
                         <span className="font-medium">${quote.order.lineItems[0].quote?.charges?.salesTax?.amount || '0'}</span>
                       </div>
-                      <div className="flex justify-between font-semibold border-t pt-1">
+                      <div className="flex justify-between font-semibold border-t dark:border-gray-700 pt-1">
                         <span>Total:</span>
                         <span>${quote.order.quote?.totalPrice?.amount || '0'} USDC</span>
                       </div>
@@ -700,8 +603,8 @@ function WorldstoreFlowContent({
             )}
 
             <div className={cardStyles.info}>
-              <h4 className="font-semibold text-gray-900 mb-3">📦 Delivery Information</h4>
-              <div className="space-y-1 text-sm">
+              <h4 className="font-semibold text-gray-900 dark:text-gray-100 mb-3">📦 Delivery Information</h4>
+              <div className="space-y-1 text-sm dark:text-gray-300">
                 <p><strong>Ship to:</strong> {name}</p>
                 <p><strong>Address:</strong> {address1} {address2 && `, ${address2}`}</p>
                 <p><strong>Location:</strong> {city}, {state} {zip}</p>
@@ -709,9 +612,9 @@ function WorldstoreFlowContent({
               </div>
             </div>
 
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-6">
+            <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-800 rounded-lg p-6">
               <div className="flex items-center justify-between mb-3">
-                <h4 className="font-semibold text-gray-900">💰 Payment Info</h4>
+                <h4 className="font-semibold text-gray-900 dark:text-gray-100">💰 Payment Info</h4>
                 <button
                   onClick={fetchBalance}
                   disabled={balanceLoading}
@@ -723,14 +626,14 @@ function WorldstoreFlowContent({
                   </svg>
                 </button>
               </div>
-              
-              <div className="space-y-2 text-sm">
+
+              <div className="space-y-2 text-sm dark:text-gray-300">
                 <div className="flex justify-between">
                   <span>Paying with:</span>
                   <span className="font-medium">{useAgentWallet ? 'Agent wallet' : 'My wallet'}</span>
                 </div>
                 {useAgentWallet && (
-                  <div className="text-xs text-gray-600 break-all text-right">{agentWalletAddress}</div>
+                  <div className="text-xs text-gray-600 dark:text-gray-400 break-all text-right">{agentWalletAddress}</div>
                 )}
                 <div className="flex justify-between">
                   <span>Your USDC Balance:</span>
@@ -740,19 +643,19 @@ function WorldstoreFlowContent({
                   <span>Order Total:</span>
                   <span className="font-medium">${quote.order.quote?.totalPrice?.amount || '0'} USDC</span>
                 </div>
-                
+
                 {isInsufficientBalance() && (
-                  <div className="mt-4 bg-red-50 border border-red-200 rounded-md p-4 text-center">
+                  <div className="mt-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-md p-4 text-center">
                     <div className="mb-3">
                       <svg className="mx-auto h-8 w-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 19.5c.77.833 1.732 2.5 3.732 2.5z" />
                       </svg>
-                      <p className="font-semibold text-red-800">Insufficient Balance</p>
+                      <p className="font-semibold text-red-800 dark:text-red-300">Insufficient Balance</p>
                     </div>
-                    <p className="text-red-700 mb-3">
+                    <p className="text-red-700 dark:text-red-300 mb-3">
                       You need ${quote.order.quote?.totalPrice?.amount || '0'} USDC but only have ${useAgentWallet ? agentBalance : balance} USDC
                     </p>
-                    <p className="text-red-700">
+                    <p className="text-red-700 dark:text-red-300">
                       Please buy more USDC to complete this order.
                     </p>
                   </div>
@@ -797,21 +700,21 @@ function WorldstoreFlowContent({
             <div className="text-center space-y-4">
               <h3 className="text-xl font-semibold text-green-600">Order Submitted!</h3>
               <div className={cardStyles.info}>
-                <p className="text-green-700">
+                <p className="text-green-700 dark:text-green-300">
                   Your order has been submitted and payment processed. You will receive an email confirmation shortly.
                 </p>
               </div>
               {result.transaction && (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                  <h4 className="font-semibold mb-2">Transaction Details</h4>
-                  <div className="space-y-1 text-sm">
+                <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
+                  <h4 className="font-semibold mb-2 dark:text-gray-100">Transaction Details</h4>
+                  <div className="space-y-1 text-sm dark:text-gray-300">
                     <p><strong>Hash:</strong> {result.transaction.hash}</p>
                     <p><strong>ID:</strong> {result.transaction.transactionId}</p>
-                    <a 
-                      href={result.transaction.explorerLink} 
-                      target="_blank" 
+                    <a
+                      href={result.transaction.explorerLink}
+                      target="_blank"
                       rel="noopener noreferrer"
-                      className="text-black hover:text-gray-800 underline"
+                      className="text-black dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-300 underline"
                     >
                       View on Explorer →
                     </a>
@@ -823,7 +726,7 @@ function WorldstoreFlowContent({
             <div className="space-y-4">
               <h3 className="text-xl font-semibold text-green-600">Order Completed!</h3>
               <div className={cardStyles.success}>
-                <div className="space-y-2">
+                <div className="space-y-2 dark:text-gray-100">
                   <p><strong>Order ID:</strong> {result.orderData?.orderId}</p>
                   <p><strong>Amount:</strong> ${result.orderData?.quote?.totalPrice?.amount} USDC</p>
                   <p><strong>Status:</strong> {result.orderData?.payment?.status}</p>
@@ -831,16 +734,16 @@ function WorldstoreFlowContent({
                 </div>
               </div>
               {result.transaction && (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                  <h4 className="font-semibold mb-2">Transaction Details</h4>
-                  <div className="space-y-1 text-sm">
+                <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
+                  <h4 className="font-semibold mb-2 dark:text-gray-100">Transaction Details</h4>
+                  <div className="space-y-1 text-sm dark:text-gray-300">
                     <p><strong>Hash:</strong> {result.transaction.hash}</p>
                     <p><strong>ID:</strong> {result.transaction.transactionId}</p>
-                    <a 
-                      href={result.transaction.explorerLink} 
-                      target="_blank" 
+                    <a
+                      href={result.transaction.explorerLink}
+                      target="_blank"
                       rel="noopener noreferrer"
-                      className="text-black hover:text-gray-800 underline"
+                      className="text-black dark:text-gray-100 hover:text-gray-800 dark:hover:text-gray-300 underline"
                     >
                       View on Explorer →
                     </a>
@@ -849,7 +752,7 @@ function WorldstoreFlowContent({
               )}
             </div>
           )}
-          
+
           {result && (
             <div className="flex justify-between">
               <button

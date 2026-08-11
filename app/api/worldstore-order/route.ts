@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createOrder, crossmintErrorResponse } from '@/lib/crossmint-server';
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,18 +13,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const API_KEY = process.env.CROSSMINT_SERVER_API_KEY;
-    if (!API_KEY) {
-      return NextResponse.json(
-        { error: 'Server API key not configured' },
-        { status: 500 }
-      );
-    }
-
-    const baseUrl = process.env.NEXT_PUBLIC_CROSSMINT_ENV === 'production' ? 'www' : 'staging';
     const defaultChain = process.env.NEXT_PUBLIC_DEFAULT_CHAIN || 'base-sepolia';
 
-    const orderPayload = {
+    const data = await createOrder({
       recipient: {
         email: recipient.email,
         physicalAddress: {
@@ -44,34 +36,10 @@ export async function POST(request: NextRequest) {
         payerAddress: walletAddress
       },
       lineItems: [{ productLocator: `amazon:${asin}` }]
-    };
-
-    const response = await fetch(`https://${baseUrl}.crossmint.com/api/2022-06-09/orders`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${API_KEY}`,
-        'X-API-KEY': API_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(orderPayload)
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      return NextResponse.json(
-        { error: `Failed to create order: ${response.statusText}` },
-        { status: response.status }
-      );
-    }
-
-    const result = await response.json();
-    return NextResponse.json(result);
-
+    return NextResponse.json(data);
   } catch (error) {
-    console.error('Worldstore order error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to create order' },
-      { status: 500 }
-    );
+    return crossmintErrorResponse(error, 'Failed to create order');
   }
-} 
+}

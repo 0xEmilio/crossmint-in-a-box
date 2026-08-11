@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     const baseUrl = crossmintEnv === 'production' ? 'https://www.crossmint.com' : 'https://staging.crossmint.com';
 
     // Call Crossmint API to get delegated signers for the wallet
-    const response = await fetch(`${baseUrl}/api/2022-06-09/wallets/${walletAddress}/signers`, {
+    const response = await fetch(`${baseUrl}/api/2025-06-09/wallets/${walletAddress}/signers`, {
       method: 'GET',
       headers: {
         'X-API-KEY': crossmintServerApiKey,

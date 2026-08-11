@@ -11,6 +11,7 @@ interface ConfigStatus {
   clientApiKey: boolean;
   serverApiKey: boolean;
   collectionId: boolean;
+  xmemeTokenAddress: boolean;
 }
 
 // Custom hook to fetch configuration status
@@ -64,7 +65,7 @@ export function ConfigurationStatus({ className = "" }: ConfigurationStatusProps
     return null;
   }
 
-  const hasDisabledFeatures = !configStatus.clientApiKey || !configStatus.serverApiKey || !configStatus.collectionId;
+  const hasDisabledFeatures = !configStatus.clientApiKey || !configStatus.serverApiKey || !configStatus.collectionId || !configStatus.xmemeTokenAddress;
 
   if (!hasDisabledFeatures) {
     return null; // Don't show anything if all features are enabled
@@ -109,7 +110,19 @@ export function ConfigurationStatus({ className = "" }: ConfigurationStatusProps
             </div>
           </div>
         )}
-        
+
+        {!configStatus.xmemeTokenAddress && (
+          <div className="flex items-start space-x-2">
+            <span className="text-red-500">•</span>
+            <div>
+              <span className="font-medium text-red-700">Memecoin Checkout</span> is disabled
+              <p className="text-gray-600 mt-1">
+                Add <code className="bg-gray-100 px-1 rounded">NEXT_PUBLIC_XMEME_TOKEN_ADDRESS</code> (a base-sepolia test ERC-20 address) to your <code className="bg-gray-100 px-1 rounded">.env.local</code> file
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="mt-3 pt-3 border-t border-gray-200">
           <p className="text-gray-600 text-xs">
             Restart the development server after adding environment variables

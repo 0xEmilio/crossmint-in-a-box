@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
       ? 'https://www.crossmint.com/api' 
       : 'https://staging.crossmint.com/api';
 
-    const response = await fetch(`${baseUrl}/2022-06-09/wallets/${walletLocator}/signers`, {
+    const response = await fetch(`${baseUrl}/2025-06-09/wallets/${walletLocator}/signers`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

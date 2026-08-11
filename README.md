@@ -27,6 +27,12 @@ NEXT_PUBLIC_CROSSMINT_ENV=staging
 # Optional - NFT Collection (for purchase testing)
 NEXT_PUBLIC_CROSSMINT_COLLECTION_ID=your-collection-id
 
+# Optional - Memecoin Checkout (fiat-only, so this can be any Solana address)
+NEXT_PUBLIC_MEMECOIN_RECIPIENT_ADDRESS=your-solana-address
+
+# Optional - overrides Crossmint's public staging "xmeme" test token
+NEXT_PUBLIC_XMEME_TOKEN_ADDRESS=
+
 ## Notes
 - Keep server keys server-side. Never expose `CROSSMINT_SERVER_API_KEY` in client code.
 ```
@@ -49,11 +55,14 @@ The application features a logically organized dashboard with three main section
 - **Your Agent** - Create and manage agent wallets for automated transactions
 
 ### **Funding** Section
-- **Buy USDC** - Fiat onramp with KYC verification and payment processing
+- **Buy USDC — Classic** - Custom step wizard with Persona KYC + Checkout.com
+- **Add Funds (Bank Style)** - Neobank-transfer-style skin over the same card/Apple Pay/Google Pay rails
+- **Buy USDC — Minimal** - Numpad-driven, dark-themed embedded checkout (port of Crossmint's minimal-checkout quickstart)
 - **Send USDC** - Transfer USDC to other addresses with balance validation
 
 ### **Commerce** Section
-- **NFT Checkout** - Purchase NFTs via embedded Crossmint checkout
+- **NFT Checkout** - Purchase NFTs via embedded Crossmint checkout (server-created order, crypto or fiat payment)
+- **Memecoin Checkout** - Buy Crossmint's public "xmeme" test token with a card, no wallet required
 - **Worldstore** - Amazon shopping integration with crypto payments
   
 ### **Minting** Section
@@ -71,6 +80,8 @@ The application features a logically organized dashboard with three main section
 | `NEXT_PUBLIC_SIGNER_TYPE` | ❌ | Default wallet signer method | `passkey` |
 | `NEXT_PUBLIC_CROSSMINT_ENV` | ❌ | Crossmint environment | `staging` |
 | `NEXT_PUBLIC_CROSSMINT_COLLECTION_ID` | ❌ | NFT collection for embedded checkout | - |
+| `NEXT_PUBLIC_MEMECOIN_RECIPIENT_ADDRESS` | ❌ | Solana address receiving Memecoin Checkout purchases | - |
+| `NEXT_PUBLIC_XMEME_TOKEN_ADDRESS` | ❌ | Override for Crossmint's public "xmeme" test token | Crossmint's staging xmeme token |
 
 ### Supported Chains
 - Base Sepolia (default)
@@ -112,9 +123,9 @@ The application features a logically organized dashboard with three main section
 - **Transaction Tracking**: Monitor transaction status and explorer links
 
 ### **Fiat Onramp (Buy USDC)**
-- **KYC Integration**: Persona identity verification
+- **Three UI variants on one integration**: Classic (custom KYC wizard), Bank Style (neobank-transfer skin), Minimal (numpad-driven, dark theme)
+- **KYC Integration**: Persona identity verification (Classic); handled inside the embedded checkout iframe for Bank Style/Minimal
 - **Payment Processing**: Secure fiat-to-crypto conversion
-- **Multi-step Flow**: Email → KYC → Payment → Completion
 - **Order Tracking**: Monitor purchase status and confirmations
 
 ### **Agent Wallets**
@@ -125,12 +136,17 @@ The application features a logically organized dashboard with three main section
 - **Transaction Viewing**: View agent wallet transaction history
 
 ### **NFT Purchases & Minting**
-- **Embedded Checkout**: Seamless NFT checkout (fiat + crypto)
+- **Embedded Checkout**: Seamless NFT checkout (fiat + crypto), order created server-side and referenced by `orderId`
 - **Per-template Preview**: Money icon opens embedded checkout preview for a template
 - **Mint from Template**: Mint NFTs to recipient (supports chain:, email:, userId:, twitter: formats)
 - **Collections CRUD**: Create/edit collections (payments, royalties, transferability, base URI)
 - **Templates CRUD**: Create/update/delete templates; ERC-1155 tokenId optional
 - **NFTs**: Paginated list with details
+
+### **Memecoin Checkout**
+- **Card-only Purchase**: Buy Crossmint's public "xmeme" test token, no wallet or seed phrase required on the buyer's side
+- **Fixed Solana Recipient**: Payment is fiat-only, so the token lands in a configured Solana address rather than the app's EVM wallet
+- **Theme Picker**: Live preview of the embedded checkout's canned appearance presets
 
 ### **Amazon Worldstore**
 - **Complete Shopping Flow**: Email → Address → Product → Review → Purchase
@@ -146,8 +162,12 @@ app/
 ├── components/           # React components
 │   ├── AgentWallet.tsx       # Agent wallet management
 │   ├── BalanceFetcher.tsx    # Balance checking
+│   ├── BankOnrampFlow.tsx    # Onramp — Bank Style variant
+│   ├── CheckoutThemePicker.tsx # Live appearance preset picker for embedded checkouts
 │   ├── ConfigurationStatus.tsx # Environment validation
-│   ├── OnrampFlow.tsx        # Fiat onramp
+│   ├── MemecoinCheckoutFlow.tsx # Memecoin (xmeme) checkout
+│   ├── MinimalOnrampFlow.tsx  # Onramp — Minimal variant
+│   ├── OnrampFlow.tsx        # Onramp — Classic variant
 │   ├── PurchaseFlow.tsx      # NFT purchases
 │   ├── SendFlow.tsx          # USDC transfers
 │   ├── ViewTransactions.tsx  # Transaction history
@@ -163,6 +183,12 @@ app/
 │   ├── add-delegated-signer/ # Delegated signer management
 │   ├── wallet-balances/      # Balance fetching
 │   ├── nft-collections/      # Collections/templates/NFTs API + mint + action status
+│   ├── purchase-order/       # NFT checkout order creation
+│   ├── memecoin-order/       # Memecoin checkout order creation
+│   ├── onramp-order/         # Onramp — Classic order creation
+│   ├── onramp-embedded-order/ # Onramp — Bank Style/Minimal order creation
+│   ├── onramp-status/        # Onramp order tracking
+│   ├── onramp-kyc-complete/  # Onramp KYC completion callback
 │   ├── worldstore-order/     # Order creation
 │   └── worldstore-status/    # Order tracking
 ├── globals.css          # Global styles
@@ -172,7 +198,14 @@ app/
 lib/
 ├── constants.ts         # Shared constants & styles
 ├── utils.ts             # Utility functions
-└── wagmi.ts             # Web3 configuration
+├── wagmi.ts             # Web3 configuration
+├── crossmint-server.ts  # Shared server-side fetch/createOrder/getOrder/updateOrder helpers
+├── checkout-themes.ts   # Canned embedded-checkout appearance presets
+├── onramp-token.ts       # USDC token-locator lookup by chain
+└── hooks/
+    ├── useAgentWallet.ts # Shared agent-wallet lookup
+    ├── useTokenBalance.ts # Shared balance-fetching
+    └── usePolling.ts     # Shared order-status polling
 ```
 
 ### Key Dependencies

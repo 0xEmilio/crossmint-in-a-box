@@ -21,21 +21,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const response = await fetch(`https://${CROSSMINT_ENV}.crossmint.com/api/2022-06-09/wallets`, {
+    // 2025-06-09 schema: chainType/type replace the old combined `type: 'evm-smart-wallet'`,
+    // `owner` replaces `linkedUser`, and the admin signer is `type: 'api-key'` (Crossmint's own
+    // API-key-derived signer is custodial admin — confirmed against a live wallet created this
+    // way; there's no 'evm-fireblocks-custodial' equivalent in this API version).
+    const response = await fetch(`https://${CROSSMINT_ENV}.crossmint.com/api/2025-06-09/wallets`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-API-KEY': serverApiKey,
       },
       body: JSON.stringify({
+        chainType: 'evm',
+        type: 'smart',
         config: {
-          adminSigner: {
-            type: 'evm-fireblocks-custodial',
-            address: adminSignerAddress,
-          },
+          adminSigner: { type: 'api-key' },
         },
-        linkedUser: `userId:agenticwallet-${adminSignerAddress}`,
-        type: 'evm-smart-wallet',
+        owner: `userId:agenticwallet-${adminSignerAddress}`,
       }),
     });
 
@@ -71,7 +73,7 @@ export async function POST(request: NextRequest) {
           ? 'https://www.crossmint.com/api'
           : 'https://staging.crossmint.com/api';
 
-        const addSignerRes = await fetch(`${baseUrl}/2022-06-09/wallets/${encodeURIComponent(walletData.address)}/signers`, {
+        const addSignerRes = await fetch(`${baseUrl}/2025-06-09/wallets/${encodeURIComponent(walletData.address)}/signers`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

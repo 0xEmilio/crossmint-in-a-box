@@ -1,16 +1,11 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { AppThemeProvider, NO_FLASH_THEME_SCRIPT } from '@/lib/theme/AppThemeProvider';
 
 export const metadata: Metadata = {
   title: 'Crossmint Auth Demo',
   description: 'A demo application showcasing Crossmint authentication',
 };
-
-// Note: If implementing Content Security Policy (CSP), Checkout.com requires:
-// - connect-src: https://*.checkout.com
-// - frame-src: https://*.checkout.com  
-// - script-src: https://*.checkout.com
-// - img-src: https://*.checkout.com
 
 export default function RootLayout({
   children,
@@ -18,11 +13,13 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
-        <script src="https://checkout-web-components.checkout.com/index.js"></script>
+        <script dangerouslySetInnerHTML={{ __html: NO_FLASH_THEME_SCRIPT }} />
       </head>
-      <body>{children}</body>
+      <body>
+        <AppThemeProvider>{children}</AppThemeProvider>
+      </body>
     </html>
   )
 }
